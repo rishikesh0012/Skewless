@@ -5,3 +5,7 @@ __pycache__/
 .ruff_cache/
 *.pyc
 .env
+
+data/raw/
+data/processed/
+artifacts/
