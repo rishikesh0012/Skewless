@@ -14,6 +14,7 @@ class SkewMode(StrEnum):
     TIMEZONE = "timezone"
     MISSING_VALUE = "missing_value"
     RUSH_HOUR_RULE = "rush_hour_rule"
+    LOCATION_MAPPING = "location_mapping"
 
 
 def apply_fault(
@@ -35,7 +36,6 @@ def apply_fault(
 
         case SkewMode.TIMEZONE:
             pickup_datetime = trip.pickup_datetime.astimezone(UTC)
-
             values["pickup_hour"] = pickup_datetime.hour
             values["pickup_day_of_week"] = pickup_datetime.weekday()
             values["pickup_month"] = pickup_datetime.month
@@ -47,8 +47,9 @@ def apply_fault(
 
         case SkewMode.RUSH_HOUR_RULE:
             hour = features.pickup_hour
-            values["is_rush_hour"] = int(
-                6 <= hour < 9 or 15 <= hour < 18
-            )
+            values["is_rush_hour"] = int(6 <= hour < 9 or 15 <= hour < 18)
+
+        case SkewMode.LOCATION_MAPPING:
+            values["pickup_location_id"] = features.pickup_location_id + 1
 
     return FeatureVector.model_validate(values)

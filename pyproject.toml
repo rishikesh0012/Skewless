@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "pandas-stubs>=2.2,<3",
     "mypy>=1.13,<2",
     "pytest>=9,<10",
     "pytest-cov>=6,<8",
@@ -52,7 +53,7 @@ select = [
 ]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 strict = true
 mypy_path = "src"
 packages = ["ml_skew"]
