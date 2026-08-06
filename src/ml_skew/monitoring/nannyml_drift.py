@@ -156,5 +156,5 @@ def _load_nannyml() -> Any:
         return import_module("nannyml")
     except ModuleNotFoundError as error:
         raise RuntimeError(
-            "NannyML is not installed. Activate " ".venv-monitoring before running drift analysis."
+            "NannyML is not installed. Activate .venv-monitoring before running drift analysis."
         ) from error
