@@ -8,9 +8,15 @@ import bentoml.mlflow  # type: ignore[import-not-found]
 import numpy as np
 import pandas as pd
 
+from ml_skew.features.online_adapter import OnlineFeatureAdapter
+from ml_skew.monitoring import detect_training_serving_skew
+from ml_skew.observability import record_monitored_prediction
 from ml_skew.serving.contracts import (
     FarePredictionRequest,
     FarePredictionResponse,
+    MonitoredFarePredictionResponse,
+    RawFarePredictionRequest,
+    SkewReportResponse,
 )
 
 DEFAULT_MODEL_TAG: Final = "ml-skew-fare-regressor:ybaxmkurs6mumjrr"
@@ -56,9 +62,49 @@ def predict_fare(
     )
 
 
+def predict_monitored_fare(
+    *,
+    model: PredictionModel,
+    request: RawFarePredictionRequest,
+    model_tag: str,
+) -> MonitoredFarePredictionResponse:
+    trip = request.to_trip_input()
+
+    skew_report = detect_training_serving_skew(
+        trip,
+        skew_mode=request.skew_mode,
+    )
+
+    online_features = OnlineFeatureAdapter(skew_mode=request.skew_mode).transform(trip)
+
+    feature_request = FarePredictionRequest.model_validate(online_features.model_dump())
+
+    prediction = predict_fare(
+        model=model,
+        request=feature_request,
+        model_tag=model_tag,
+    )
+
+    record_monitored_prediction(
+        predicted_fare_amount=prediction.predicted_fare_amount,
+        skew_mode=skew_report.skew_mode,
+        skew_detected=skew_report.detected,
+    )
+
+    return MonitoredFarePredictionResponse(
+        predicted_fare_amount=prediction.predicted_fare_amount,
+        model_tag=prediction.model_tag,
+        skew=SkewReportResponse.from_report(skew_report),
+    )
+
+
 @bentoml.service(
     resources={"cpu": "1"},
     traffic={"timeout": 10},
+    metrics={
+        "enabled": True,
+        "namespace": "ml_skew",
+    },
 )
 class FarePredictionService:
     bento_model = bentoml.models.BentoModel(resolve_model_tag())
@@ -78,6 +124,23 @@ class FarePredictionService:
         request = FarePredictionRequest.model_validate(payload)
 
         return predict_fare(
+            model=self.model,
+            request=request,
+            model_tag=self.model_tag,
+        )
+
+    @bentoml.api(  # type: ignore[untyped-decorator]
+        route="/predict-raw",
+        input_spec=RawFarePredictionRequest,
+        output_spec=MonitoredFarePredictionResponse,
+    )
+    def predict_raw(
+        self,
+        **payload: object,
+    ) -> MonitoredFarePredictionResponse:
+        request = RawFarePredictionRequest.model_validate(payload)
+
+        return predict_monitored_fare(
             model=self.model,
             request=request,
             model_tag=self.model_tag,

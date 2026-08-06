@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
     "mlflow>=3.14,<4",
     "bentoml==1.4.39",
+    "prometheus-client>=0.26,<1",
     "numpy>=2.0,<3",
     "joblib>=1.4,<2",
     "lightgbm>=4.6,<5",

@@ -1,0 +1,2 @@
+nannyml==0.13.1
+pydantic-settings==2.14.2
