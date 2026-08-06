@@ -57,3 +57,7 @@ python_version = "3.13"
 strict = true
 mypy_path = "src"
 packages = ["ml_skew"]
+
+[[tool.mypy.overrides]]
+module = ["sklearn", "sklearn.*"]
+ignore_missing_imports = true
