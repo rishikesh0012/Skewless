@@ -9,13 +9,20 @@ description = "Training-serving feature parity and model monitoring"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "numpy>=2.0,<3",
+    "joblib>=1.4,<2",
+    "lightgbm>=4.6,<5",
+    "pandas>=2.2,<4",
+    "pyarrow>=18,<24",
     "pydantic>=2.10,<3",
     "pydantic-settings>=2.7,<3",
+    "scikit-learn>=1.6,<2",
     "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]
 dev = [
+    "pandas-stubs>=2.2,<3",
     "mypy>=1.13,<2",
     "pytest>=9,<10",
     "pytest-cov>=6,<8",
@@ -47,7 +54,19 @@ select = [
 ]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 strict = true
 mypy_path = "src"
 packages = ["ml_skew"]
+
+[[tool.mypy.overrides]]
+module = ["sklearn", "sklearn.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["lightgbm", "lightgbm.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["joblib", "joblib.*"]
+ignore_missing_imports = true

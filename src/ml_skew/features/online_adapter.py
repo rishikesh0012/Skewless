@@ -6,11 +6,7 @@ from ml_skew.features.fault_injector import SkewMode, apply_fault
 
 class OnlineFeatureAdapter:
     def __init__(self, skew_mode: SkewMode | None = None) -> None:
-        self._skew_mode = (
-            skew_mode
-            if skew_mode is not None
-            else Settings().skew_mode
-        )
+        self._skew_mode = skew_mode if skew_mode is not None else Settings().skew_mode
 
     def transform(self, trip: TaxiTripInput) -> FeatureVector:
         features = build_features(trip)
