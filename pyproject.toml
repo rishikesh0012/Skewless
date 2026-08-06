@@ -66,3 +66,7 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["lightgbm", "lightgbm.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["joblib", "joblib.*"]
+ignore_missing_imports = true
