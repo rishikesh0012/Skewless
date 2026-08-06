@@ -10,6 +10,7 @@ import pandas as pd
 
 from ml_skew.features.online_adapter import OnlineFeatureAdapter
 from ml_skew.monitoring import detect_training_serving_skew
+from ml_skew.observability import record_monitored_prediction
 from ml_skew.serving.contracts import (
     FarePredictionRequest,
     FarePredictionResponse,
@@ -84,6 +85,12 @@ def predict_monitored_fare(
         model_tag=model_tag,
     )
 
+    record_monitored_prediction(
+        predicted_fare_amount=prediction.predicted_fare_amount,
+        skew_mode=skew_report.skew_mode,
+        skew_detected=skew_report.detected,
+    )
+
     return MonitoredFarePredictionResponse(
         predicted_fare_amount=prediction.predicted_fare_amount,
         model_tag=prediction.model_tag,
@@ -94,6 +101,10 @@ def predict_monitored_fare(
 @bentoml.service(
     resources={"cpu": "1"},
     traffic={"timeout": 10},
+    metrics={
+        "enabled": True,
+        "namespace": "ml_skew",
+    },
 )
 class FarePredictionService:
     bento_model = bentoml.models.BentoModel(resolve_model_tag())
