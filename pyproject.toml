@@ -9,6 +9,7 @@ description = "Training-serving feature parity and model monitoring"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "mlflow>=3.14,<4",
     "numpy>=2.0,<3",
     "joblib>=1.4,<2",
     "lightgbm>=4.6,<5",
@@ -33,7 +34,6 @@ dev = [
 packages = ["src/ml_skew"]
 
 [tool.pytest.ini_options]
-asyncio_default_fixture_loop_scope = "function"
 addopts = "-q --strict-markers"
 pythonpath = ["src"]
 testpaths = ["tests"]
