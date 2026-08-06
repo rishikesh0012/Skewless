@@ -12,3 +12,7 @@ artifacts/
 
 mlflow/mlflow.db
 mlflow/artifacts/
+
+.DS_Store
+/mlflow/mlflow.db*
+/mlflow/artifacts/
