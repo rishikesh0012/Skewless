@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 
@@ -41,12 +42,22 @@ def log_training_run(
     training_frame = dataset.features.astype("float64").copy()
     training_frame[TARGET_COLUMN] = dataset.target.astype("float64").to_numpy()
 
-    tracked_dataset = mlflow.data.from_pandas(  # type: ignore[attr-defined]
-        training_frame,
-        source=dataset_source,
-        targets=TARGET_COLUMN,
-        name=dataset_name,
-    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=(
+                r"^The specified dataset source can be interpreted "
+                r"in multiple ways: LocalArtifactDatasetSource, "
+                r"LocalArtifactDatasetSource\\."
+            ),
+            category=UserWarning,
+        )
+        tracked_dataset = mlflow.data.from_pandas(  # type: ignore[attr-defined]
+            training_frame,
+            source=dataset_source,
+            targets=TARGET_COLUMN,
+            name=dataset_name,
+        )
 
     input_example = dataset.features.head(5).astype("float64").copy()
     predictions = result.model.predict(input_example)
