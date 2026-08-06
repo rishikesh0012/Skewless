@@ -9,6 +9,7 @@ description = "Training-serving feature parity and model monitoring"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "numpy>=2.0,<3",
     "joblib>=1.4,<2",
     "lightgbm>=4.6,<5",
     "pandas>=2.2,<4",
@@ -60,4 +61,8 @@ packages = ["ml_skew"]
 
 [[tool.mypy.overrides]]
 module = ["sklearn", "sklearn.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["lightgbm", "lightgbm.*"]
 ignore_missing_imports = true
