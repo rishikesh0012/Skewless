@@ -185,17 +185,13 @@ The same trip runs through `shared.py` for both paths. No fault is applied, prod
 
 Capture details and naming guidance are documented in [`docs/screenshots/README.md`](docs/screenshots/README.md).
 
-## Recommended GitHub metadata
-
-**Description**
-
-> Interactive demo of training-serving feature skew. Shows how duplicated feature logic causes silent failures — and how a shared transformation eliminates them.
-
-**Topics**
-
-`machine-learning` · `mlops` · `feature-engineering` · `training-serving-skew` · `fastapi` · `react` · `lightgbm`
-
 ## Verification
+
+Install the backend development dependencies before running the quality checks:
+
+```bash
+python -m pip install -e ".[dev]"
+```
 
 ```bash
 python -m pytest

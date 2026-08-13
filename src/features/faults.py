@@ -31,5 +31,8 @@ def apply_fault(*, features: FeatureVector, trip: TaxiTrip, mode: SkewMode) -> F
         values["pickup_day_of_week"] = pickup_datetime.weekday()
         values["pickup_month"] = pickup_datetime.month
         values["is_weekend"] = int(pickup_datetime.weekday() >= 5)
+        values["is_rush_hour"] = int(
+            7 <= pickup_datetime.hour < 10 or 16 <= pickup_datetime.hour < 19
+        )
 
     return FeatureVector.model_validate(values)

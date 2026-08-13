@@ -54,6 +54,9 @@ def test_timezone_fault_uses_utc_for_online_time_features(trip: TaxiTrip) -> Non
 
     assert online.pickup_hour == 13
     assert online.pickup_day_of_week == 0
+    assert online.pickup_month == 1
+    assert online.is_weekend == 0
+    assert online.is_rush_hour == 0
 
 
 @pytest.mark.parametrize(
