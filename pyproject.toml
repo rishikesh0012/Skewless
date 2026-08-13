@@ -3,37 +3,35 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ml-skew"
-version = "0.1.0"
-description = "Training-serving feature parity and model monitoring"
+name = "skewless"
+version = "1.0.0"
+description = "Skewless — Training-Serving Feature Parity"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "mlflow>=3.14,<4",
-    "bentoml==1.4.39",
-    "prometheus-client>=0.26,<1",
-    "numpy>=2.0,<3",
+    "fastapi>=0.116,<1",
+    "uvicorn[standard]>=0.35,<1",
     "joblib>=1.4,<2",
     "lightgbm>=4.6,<5",
+    "numpy>=2.0,<3",
     "pandas>=2.2,<4",
     "pyarrow>=18,<24",
     "pydantic>=2.10,<3",
-    "pydantic-settings>=2.7,<3",
     "scikit-learn>=1.6,<2",
     "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pandas-stubs>=2.2,<3",
+    "httpx2>=2.10,<3",
     "mypy>=1.13,<2",
+    "pandas-stubs>=2.2,<3",
     "pytest>=9,<10",
-    "pytest-cov>=6,<8",
     "ruff>=0.9,<1",
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ml_skew"]
+packages = ["src/features", "src/model", "src/api"]
 
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers"
@@ -45,30 +43,14 @@ line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-select = [
-    "B",
-    "E",
-    "F",
-    "I",
-    "RUF",
-    "SIM",
-    "UP",
-]
+select = ["B", "E", "F", "I", "RUF", "SIM", "UP"]
 
 [tool.mypy]
 python_version = "3.13"
 strict = true
 mypy_path = "src"
-packages = ["ml_skew"]
+packages = ["features", "model", "api"]
 
 [[tool.mypy.overrides]]
-module = ["sklearn", "sklearn.*"]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = ["lightgbm", "lightgbm.*"]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = ["joblib", "joblib.*"]
+module = ["lightgbm", "lightgbm.*", "sklearn", "sklearn.*", "joblib", "joblib.*"]
 ignore_missing_imports = true

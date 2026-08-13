@@ -1,0 +1,30 @@
+{
+  "project": "Skewless \u2014 Training-Serving Feature Parity",
+  "model_type": "LGBMRegressor",
+  "feature_names": [
+    "trip_distance_miles",
+    "passenger_count",
+    "pickup_location_id",
+    "dropoff_location_id",
+    "pickup_hour",
+    "pickup_day_of_week",
+    "pickup_month",
+    "is_weekend",
+    "is_rush_hour"
+  ],
+  "training_rows": 95759,
+  "trained_at": "2026-08-13T18:00:41.229469+05:30",
+  "training_config": {
+    "validation_size": 0.2,
+    "random_state": 42,
+    "n_estimators": 300,
+    "learning_rate": 0.05,
+    "num_leaves": 31,
+    "min_child_samples": 20
+  },
+  "metrics": {
+    "mean_absolute_error": 2.039129713746972,
+    "root_mean_squared_error": 6.76923422015947,
+    "r2_score": 0.899576650852265
+  }
+}

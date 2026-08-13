@@ -5,16 +5,12 @@ __pycache__/
 .ruff_cache/
 *.pyc
 .env
+.env.*
+!.env.example
+.claude/
 
 data/raw/
-data/processed/
 artifacts/
 
-mlflow/mlflow.db
-mlflow/artifacts/
-
 .DS_Store
-/mlflow/mlflow.db*
-/mlflow/artifacts/
-
-.venv-monitoring/
+frontend/dist/
