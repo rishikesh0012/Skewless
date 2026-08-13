@@ -159,6 +159,8 @@ skewless/
 │       └── main.py
 ├── frontend/
 ├── data/
+├── docs/
+│   └── screenshots/
 ├── models/
 ├── tests/
 ├── requirements.txt
@@ -167,12 +169,31 @@ skewless/
 
 ## Screenshots
 
-Add final portfolio screenshots after starting both applications:
+Both captures use the same default trip and `distance_unit` scenario. Only the feature architecture changes.
 
-- `docs/screenshots/broken-distance-skew.png` — Broken mode showing the distance mismatch and changed fare
-- `docs/screenshots/correct-perfect-parity.png` — Correct mode showing 9/9 parity on the same trip
+### Broken — duplicated paths
 
-These paths are placeholders; screenshots are not yet committed.
+The independent serving path applies the distance-unit fault. The model scores the changed serving vector, producing a `$29.19` fare with `8 / 9` features matched.
+
+![Broken mode showing distance-unit training-serving skew](docs/screenshots/broken-distance-skew.png)
+
+### Correct — shared transformation
+
+The same trip runs through `shared.py` for both paths. No fault is applied, producing a `$20.29` fare with perfect `9 / 9` parity.
+
+![Correct mode showing perfect training-serving feature parity](docs/screenshots/correct-perfect-parity.png)
+
+Capture details and naming guidance are documented in [`docs/screenshots/README.md`](docs/screenshots/README.md).
+
+## Recommended GitHub metadata
+
+**Description**
+
+> Interactive demo of training-serving feature skew. Shows how duplicated feature logic causes silent failures — and how a shared transformation eliminates them.
+
+**Topics**
+
+`machine-learning` · `mlops` · `feature-engineering` · `training-serving-skew` · `fastapi` · `react` · `lightgbm`
 
 ## Verification
 
