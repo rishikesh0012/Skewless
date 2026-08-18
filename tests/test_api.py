@@ -48,6 +48,23 @@ def test_broken_mode_reports_distance_skew_and_scores_serving_vector(
     assert payload["predicted_fare_amount"] == 3.0 + 7.242048 * 2.5
 
 
+def test_broken_mode_reports_timezone_skew(client: TestClient) -> None:
+    response = client.post(
+        "/predict",
+        json={**BASE_REQUEST, "feature_mode": "broken", "skew_mode": "timezone"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["applied_skew_mode"] == "timezone"
+    assert payload["parity"]["matched"] is False
+    assert payload["parity"]["matched_count"] == 7
+    assert {mismatch["feature"] for mismatch in payload["parity"]["mismatches"]} == {
+        "pickup_hour",
+        "is_rush_hour",
+    }
+
+
 def test_correct_mode_ignores_fault_and_guarantees_parity(client: TestClient) -> None:
     response = client.post(
         "/predict",

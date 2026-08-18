@@ -1,0 +1,22 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # Frontend origin is the nginx container's published host port (8080),
+      # not the Vite dev server's 5173 used by `npm run dev`.
+      CORS_ALLOWED_ORIGINS: "http://localhost:8080,http://127.0.0.1:8080"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend

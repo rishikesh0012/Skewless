@@ -29,6 +29,17 @@ def test_broken_mode_can_expose_skew() -> None:
     assert mismatches[0].absolute_difference > 0
 
 
+def test_timezone_mode_can_expose_skew() -> None:
+    trip = build_trip()
+    mismatches = compare_feature_vectors(
+        canonical_transform(trip),
+        online_transform(trip, SkewMode.TIMEZONE),
+    )
+
+    assert {mismatch.feature for mismatch in mismatches} == {"pickup_hour", "is_rush_hour"}
+    assert all(mismatch.absolute_difference > 0 for mismatch in mismatches)
+
+
 def test_shared_path_has_perfect_parity() -> None:
     trip = build_trip()
 
