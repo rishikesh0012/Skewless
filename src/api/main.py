@@ -15,6 +15,7 @@ from features.faults import SkewMode
 from features.online import transform_trip as online_transform
 from features.parity import FeatureMismatch, compare_feature_vectors
 from features.shared import transform_trip as shared_transform
+from model.drift import DriftMonitor, DriftStatus, load_reference_stats
 from model.explain import FareExplainer
 from model.predictor import FarePredictor
 
@@ -117,6 +118,25 @@ class GlobalImportanceResponse(BaseModel):
     feature_importance: dict[str, float]
 
 
+class FeatureDriftResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    feature: str
+    psi: float
+    status: DriftStatus
+    reference_mean: float
+    current_mean: float
+
+
+class DriftResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: DriftStatus
+    sample_count: int
+    reference_available: bool
+    features: tuple[FeatureDriftResponse, ...]
+
+
 @lru_cache
 def get_predictor() -> FarePredictor:
     return FarePredictor()
@@ -125,6 +145,11 @@ def get_predictor() -> FarePredictor:
 @lru_cache
 def get_explainer() -> FareExplainer:
     return FareExplainer(get_predictor().raw_model)
+
+
+@lru_cache
+def get_drift_monitor() -> DriftMonitor:
+    return DriftMonitor()
 
 
 def _build_features(
@@ -197,8 +222,10 @@ app.add_middleware(
 def predict(
     request: PredictionRequest,
     predictor: Annotated[FarePredictor, Depends(get_predictor)],
+    drift_monitor: Annotated[DriftMonitor, Depends(get_drift_monitor)],
 ) -> PredictionResponse:
     training_features, serving_features, applied_skew_mode = _build_features(request)
+    drift_monitor.record(serving_features)
 
     mismatches = compare_feature_vectors(training_features, serving_features)
     mismatch_responses = tuple(MismatchResponse.from_mismatch(item) for item in mismatches)
@@ -270,4 +297,29 @@ def global_importance(
     return GlobalImportanceResponse(
         model_name=predictor.model_name,
         feature_importance=explainer.global_feature_importance(),
+    )
+
+
+@app.get("/monitoring/drift", response_model=DriftResponse)
+def monitoring_drift(
+    predictor: Annotated[FarePredictor, Depends(get_predictor)],
+    drift_monitor: Annotated[DriftMonitor, Depends(get_drift_monitor)],
+) -> DriftResponse:
+    reference = load_reference_stats(predictor.model_path.with_name("reference_stats.json"))
+    report = drift_monitor.compute_drift(reference)
+
+    return DriftResponse(
+        status=report.status,
+        sample_count=report.sample_count,
+        reference_available=report.reference_available,
+        features=tuple(
+            FeatureDriftResponse(
+                feature=item.feature,
+                psi=item.psi,
+                status=item.status,
+                reference_mean=item.reference_mean,
+                current_mean=item.current_mean,
+            )
+            for item in report.features
+        ),
     )

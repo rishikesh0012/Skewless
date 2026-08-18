@@ -1,14 +1,61 @@
 # Skewless — Training-Serving Feature Parity
 
-> An interactive FastAPI and React demo showing how duplicated feature engineering creates training-serving skew—and how one shared transformation eliminates it.
+> A production-shaped ML system built around one concrete, demonstrable failure mode:
+> **training-serving feature skew**. Duplicated feature-engineering code can silently diverge
+> between training and serving — same feature name, different value, no crash, no error, just
+> a wrong prediction. Skewless makes that failure visible, then builds the rest of a real
+> MLOps stack around it: model comparison, MLflow tracking, Pandera validation, SHAP
+> explainability, lightweight drift monitoring, Docker, and a live deployment.
 
-## Why this project exists
+## Live demo
 
-A model can perform well during training and still return wrong production predictions without its weights changing. The failure can happen earlier in the pipeline: training and serving may calculate the same named feature differently.
+- **Frontend:** https://skewless.vercel.app
+- **API:** https://skewless-api.onrender.com ([interactive Swagger docs](https://skewless-api.onrender.com/docs))
 
-A distance trained in miles but served in kilometres is still a valid number. The API does not crash and the model still responds, but it scores the wrong feature vector. This is **training-serving feature skew**.
+The backend runs on Render's free tier and spins down after 15 minutes idle — the first
+request after a quiet period can take up to a minute to wake it back up.
 
-Skewless makes that normally silent failure visible by building a training reference vector and a serving vector for the same raw NYC taxi trip, comparing all nine features, and scoring the serving vector.
+## What it demonstrates
+
+A distance trained in miles but served in kilometres is still a valid number. The API
+doesn't crash and the model still responds — it just scores the wrong feature vector. Skewless
+builds a training reference vector and a serving vector for the same raw NYC taxi trip,
+compares all nine features, and scores the serving vector, so this normally-silent failure
+becomes a visible `8 / 9 matched` in the response.
+
+## Key features
+
+- **Skew detection** — toggle between a *broken* (duplicated) and *correct* (shared) feature
+  pipeline; compare all 9 features and see exactly which one silently diverged.
+- **Model comparison** — Ridge, Random Forest, and LightGBM trained on the same split, scored
+  on MAE/RMSE/R², lowest-RMSE candidate auto-selected.
+- **MLflow tracking** — every candidate logged as its own run (params, metrics, a `selected`
+  tag); only the winner's model artifact is attached.
+- **Pandera validation** — a declarative schema for the raw training data, replacing
+  hand-rolled row filtering.
+- **SHAP explainability** — per-prediction feature contributions plus a global
+  feature-importance endpoint.
+- **Drift monitoring** — in-memory Population Stability Index comparison of served traffic
+  against the training distribution. No database.
+- **Dockerized** — backend and frontend each containerized; `docker compose up` runs the full
+  stack locally.
+- **Deployed** — FastAPI on Render, React on Vercel, verified live end-to-end including CORS.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    UI["React frontend<br/>(Vercel)"] -->|HTTPS| API["FastAPI backend<br/>(Docker → Render)"]
+    API --> CORE["Model · SHAP · Drift monitor"]
+    TRAIN["Training pipeline<br/>Pandera → compare 3 models → MLflow"] -->|writes| ART[("models/")]
+    ART -.->|loaded at startup| CORE
+```
+
+The frontend calls the backend directly over HTTPS; the backend loads whatever the offline
+training pipeline last wrote to `models/` — it never touches the training data or MLflow.
+Full breakdown of every subsystem (training pipeline, Pandera schema, MLflow workflow, SHAP
+internals, drift math, Docker/Render/Vercel config) is in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), including a more detailed diagram.
 
 ## Broken versus Correct
 
@@ -17,9 +64,10 @@ Skewless makes that normally silent failure visible by building a training refer
 | `broken` | `canonical.py` | independent `online.py` plus an optional fault | Duplicated logic can diverge |
 | `correct` | `shared.py` | the same `shared.py` | 9/9 parity by construction |
 
-In **Broken** mode, `online.py` intentionally owns an independent implementation and never calls `canonical.py` or `shared.py`. This reproduces the maintenance risk found in separate training and production pipelines.
-
-In **Correct** mode, both paths call one transformation from `shared.py`. Fault injection is not applied because there is no separate serving transformation to corrupt.
+In **Broken** mode, `online.py` intentionally owns an independent implementation and never
+calls `canonical.py` or `shared.py`, reproducing the maintenance risk of separate training and
+production pipelines. In **Correct** mode, both paths call one transformation from
+`shared.py` — fault injection has nothing separate to corrupt.
 
 ```mermaid
 flowchart LR
@@ -30,13 +78,11 @@ flowchart LR
     C --> P["9-feature parity report"]
     O --> P
     S --> P
-    O --> F["LightGBM prediction"]
+    O --> F["trained model prediction"]
     S --> F
 ```
 
-## Supported skew scenarios
-
-Only three modes exist:
+### Supported skew scenarios
 
 | `skew_mode` | Serving behavior in Broken mode |
 |---|---|
@@ -44,23 +90,49 @@ Only three modes exist:
 | `distance_unit` | Multiplies miles by `1.609344`, simulating kilometres in a miles feature |
 | `timezone` | Derives calendar features in UTC instead of `America/New_York` |
 
-The model schema remains fixed at nine features:
+The model schema is fixed at nine features: `trip_distance_miles`, `passenger_count`,
+`pickup_location_id`, `dropoff_location_id`, `pickup_hour`, `pickup_day_of_week`,
+`pickup_month`, `is_weekend`, `is_rush_hour`. The canonical and shared transformations use
+identical timezone conversion, six-decimal distance rounding, missing-passenger default of
+one, weekday/month extraction, weekend logic, and 07:00–10:00 / 16:00–19:00 rush-hour windows.
 
-```text
-trip_distance_miles   passenger_count       pickup_location_id
-dropoff_location_id  pickup_hour           pickup_day_of_week
-pickup_month         is_weekend            is_rush_hour
-```
+## Model comparison
 
-The canonical and shared transformations use identical timezone conversion, six-decimal distance rounding, missing-passenger default of one, weekday/month extraction, weekend logic, and 07:00–10:00 / 16:00–19:00 rush-hour windows.
+Training compares three regressors on the same 80/20 split and selects the lowest-RMSE
+candidate. Results from a full run (`--row-limit 100000`, 95,759 valid rows after Pandera
+filtering):
+
+| Model | MAE | RMSE | R² |
+|---|---|---|---|
+| Random Forest | 2.23 | **5.96** | 0.922 |
+| LightGBM | 2.04 | 6.77 | 0.900 |
+| Ridge | 2.95 | 7.06 | 0.891 |
+
+The LightGBM row matches the currently deployed model's committed `models/metadata.json`
+exactly — it was trained before this comparison step existed, with the same hyperparameters
+and split. Retraining today would select Random Forest instead; the deployed model hasn't
+been swapped, on purpose, so the demo's numbers stay stable while this README and
+`docs/ARCHITECTURE.md` are written. Retraining regenerates `model_comparison.json` with
+current numbers for whichever model wins.
+
+## API endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/predict` | Score a trip; returns the fare, both feature vectors, and the parity report |
+| `POST` | `/explain` | SHAP contributions for the serving vector of the same request |
+| `GET` | `/explain/global-importance` | Dataset-level mean absolute SHAP importance |
+| `GET` | `/monitoring/drift` | PSI-based drift report vs. the training reference distribution |
+| `GET` | `/model-info` | Model name, feature names, training metadata |
+| `GET` | `/health` | Liveness check (also Render's health-check path) |
+
+Full request/response schemas: [skewless-api.onrender.com/docs](https://skewless-api.onrender.com/docs).
 
 ## Quick start
 
 Requirements: Python 3.11+ and Node.js 22+.
 
 ### 1. Run the API
-
-From the repository root:
 
 ```bash
 python3 -m venv .venv
@@ -69,7 +141,9 @@ python -m pip install -r requirements.txt
 PYTHONPATH=src uvicorn api.main:app --reload
 ```
 
-The included `models/fare_model.joblib` is ready to use. FastAPI runs at [http://localhost:8000](http://localhost:8000), and its interactive OpenAPI documentation is at [http://localhost:8000/docs](http://localhost:8000/docs).
+The included `models/fare_model.joblib` is ready to use. FastAPI runs at
+[http://localhost:8000](http://localhost:8000); interactive docs at
+[http://localhost:8000/docs](http://localhost:8000/docs).
 
 ### 2. Run the frontend
 
@@ -81,7 +155,8 @@ npm ci
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173). The Vite development server talks to the API on port `8000`; set `VITE_API_BASE_URL` if the API is hosted elsewhere.
+Open [http://localhost:5173](http://localhost:5173). Set `VITE_API_BASE_URL` if the API is
+hosted elsewhere.
 
 ### 3. Or run both with Docker
 
@@ -89,23 +164,24 @@ Open [http://localhost:5173](http://localhost:5173). The Vite development server
 docker compose up --build
 ```
 
-This builds and starts both containers: the API at [http://localhost:8000](http://localhost:8000) (unchanged) and the frontend at [http://localhost:8080](http://localhost:8080) (note: 8080, not the `npm run dev` port 5173). The frontend's API URL is baked in at image build time via the `VITE_API_BASE_URL` build arg (see `frontend/Dockerfile`); the backend's `CORS_ALLOWED_ORIGINS` is set in `docker-compose.yml` to allow the containerized frontend's origin. Stop with `docker compose down`.
+Starts both containers: the API at [http://localhost:8000](http://localhost:8000) and the
+frontend at [http://localhost:8080](http://localhost:8080) (note: 8080, not the `npm run dev`
+port 5173). The frontend's API URL is baked in at image build time via the
+`VITE_API_BASE_URL` build arg; `docker-compose.yml` sets the backend's `CORS_ALLOWED_ORIGINS`
+to match. Stop with `docker compose down`.
 
 ## Demo walkthrough
 
 The UI opens with a deterministic UTC trip and `distance_unit` selected.
 
-1. Leave the architecture on **Broken** and click **Run parity check**.
-2. Observe `8 / 9` matched features. `trip_distance_miles` changes from `4.5` to `7.242048`, and the serving vector produces a different fare.
-3. Keep the same trip and skew scenario, then switch only the architecture to **Correct**.
-4. Run the check again. Both paths use `shared.py`, the fault is not applied, and the report shows `9 / 9` matched features.
-
-With the bundled model, the current default demo produces approximately `$29.19` in Broken mode and `$20.29` in Correct mode. Small changes are expected if the model is retrained.
-
-Direct API example:
+1. Leave the architecture on **Broken** and click **Run parity check**. Observe `8 / 9`
+   matched features — `trip_distance_miles` changes from `4.5` to `7.242048`, and the serving
+   vector produces a different fare (**$29.19** with the bundled model).
+2. Switch only the architecture to **Correct** and run again. Both paths use `shared.py`, the
+   fault is not applied, and the report shows `9 / 9` matched (**$20.29**).
 
 ```bash
-curl -X POST http://localhost:8000/predict \
+curl -X POST https://skewless-api.onrender.com/predict \
   -H 'Content-Type: application/json' \
   -d '{
     "pickup_datetime": "2024-01-08T13:30:00Z",
@@ -118,101 +194,80 @@ curl -X POST http://localhost:8000/predict \
   }'
 ```
 
-The response includes the scored fare, full training and serving vectors, all nine comparisons, requested versus applied skew mode, and a concise mismatch list.
+## Screenshots
 
-`POST /explain` accepts the same request body and returns a SHAP explanation of the *serving* prediction: a base value plus a per-feature contribution for all nine features, so you can see exactly which feature (and how much of its skew) moved the fare. `GET /explain/global-importance` returns one dataset-level feature-importance summary (mean absolute SHAP value per feature) computed from a small built-in reference sample.
+Both captures use the same default trip and `distance_unit` scenario. Only the feature
+architecture changes.
 
-## Tech stack
+### Broken — duplicated paths
 
-- **Model:** LightGBM, scikit-learn, pandas, NumPy
-- **Explainability:** SHAP (`model/explain.py`)
-- **Artifacts:** joblib and JSON metadata
-- **API:** FastAPI, Pydantic, Uvicorn
-- **Frontend:** React, TypeScript, Tailwind CSS, Vite
-- **Quality:** pytest, Ruff, mypy, oxlint, GitHub Actions
+![Broken mode showing distance-unit training-serving skew](docs/screenshots/broken-distance-skew.png)
+
+### Correct — shared transformation
+
+![Correct mode showing perfect training-serving feature parity](docs/screenshots/correct-perfect-parity.png)
+
+Capture details: [`docs/screenshots/README.md`](docs/screenshots/README.md).
 
 ## Train the model
 
-The trained model is committed so the demo works immediately. To reproduce it, download the January 2024 NYC Yellow Taxi Trip Records Parquet file and place it at:
-
-```text
-data/raw/yellow_tripdata_2024-01.parquet
-```
-
-The raw dataset is intentionally ignored by Git. Then run:
+The trained model is committed so the demo works immediately. To reproduce it, download the
+January 2024 NYC Yellow Taxi Trip Records parquet file to
+`data/raw/yellow_tripdata_2024-01.parquet` (intentionally gitignored), then:
 
 ```bash
 PYTHONPATH=src python -m model.train --row-limit 100000
 ```
 
-Training validates the raw rows against a Pandera schema (`model/schema.py`), dropping any row that fails a check, builds features through `shared.py`, trains three candidate regressors (Ridge, Random Forest, LightGBM) on the same split, scores each on MAE/RMSE/R², and selects the lowest-RMSE candidate. It writes:
+This validates raw rows against a Pandera schema, drops any that fail, builds features
+through `shared.py`, trains and compares the three candidates ([Model comparison](#model-comparison)
+above), logs every run to MLflow, and writes:
 
 ```text
 models/fare_model.joblib        # the selected model
 models/metadata.json            # selected model's metadata and metrics
 models/model_comparison.json    # MAE/RMSE/R² for all three candidates
+models/reference_stats.json     # per-feature training distribution, for drift monitoring
 ```
+
+## Tech stack
+
+- **Model:** LightGBM, Random Forest, Ridge (scikit-learn), pandas, NumPy
+- **Experiment tracking:** MLflow
+- **Data validation:** Pandera
+- **Explainability:** SHAP
+- **Drift monitoring:** in-memory PSI (`model/drift.py`)
+- **API:** FastAPI, Pydantic, Uvicorn
+- **Frontend:** React, TypeScript, Tailwind CSS, Vite
+- **Infra:** Docker, Render (backend), Vercel (frontend)
+- **Quality:** pytest, Ruff, mypy, oxlint, GitHub Actions
 
 ## Project structure
 
 ```text
 skewless/
 ├── src/
-│   ├── features/
-│   │   ├── canonical.py
-│   │   ├── online.py
-│   │   ├── shared.py
-│   │   ├── parity.py
-│   │   └── faults.py
-│   ├── model/
-│   │   ├── train.py
-│   │   ├── schema.py
-│   │   ├── predictor.py
-│   │   └── explain.py
-│   └── api/
-│       └── main.py
+│   ├── features/       # canonical.py, online.py, shared.py, faults.py, parity.py
+│   ├── model/          # train.py, schema.py, predictor.py, explain.py, drift.py
+│   └── api/            # main.py — all six endpoints
 ├── frontend/
-├── data/
 ├── docs/
+│   ├── ARCHITECTURE.md # full system design + diagram
 │   └── screenshots/
-├── models/
+├── models/              # committed model + JSON artifacts
 ├── tests/
-├── Dockerfile              # backend image
+├── Dockerfile            # backend image
 ├── docker-compose.yml
-├── render.yaml             # Render Blueprint (backend deploy)
+├── render.yaml           # Render Blueprint (backend deploy)
 ├── requirements.txt
 └── README.md
 ```
 
-`frontend/Dockerfile` and `frontend/nginx.conf` build and serve the frontend image.
-
-## Screenshots
-
-Both captures use the same default trip and `distance_unit` scenario. Only the feature architecture changes.
-
-### Broken — duplicated paths
-
-The independent serving path applies the distance-unit fault. The model scores the changed serving vector, producing a `$29.19` fare with `8 / 9` features matched.
-
-![Broken mode showing distance-unit training-serving skew](docs/screenshots/broken-distance-skew.png)
-
-### Correct — shared transformation
-
-The same trip runs through `shared.py` for both paths. No fault is applied, producing a `$20.29` fare with perfect `9 / 9` parity.
-
-![Correct mode showing perfect training-serving feature parity](docs/screenshots/correct-perfect-parity.png)
-
-Capture details and naming guidance are documented in [`docs/screenshots/README.md`](docs/screenshots/README.md).
-
 ## Verification
-
-Install the backend development dependencies before running the quality checks:
 
 ```bash
 python -m pip install -e ".[dev]"
-```
 
-```bash
 python -m pytest
 python -m ruff format --check src tests
 python -m ruff check src tests
@@ -225,36 +280,21 @@ npm run lint
 
 GitHub Actions runs the same backend and frontend checks on pushes and pull requests.
 
-## Deploy
+## Deploy your own copy
 
-The backend deploys as-is from the existing root `Dockerfile`; the frontend deploys as a static Vite build, no Docker involved. Deploy the backend first — the frontend build needs its URL.
+The backend deploys as-is from the root `Dockerfile`; the frontend deploys as a static Vite
+build (no Docker involved in the actual Vercel deployment). Deploy the backend first — the
+frontend build needs its URL.
 
-### 1. Backend → Render
+**1. Backend → Render.** `render.yaml` is a Render Blueprint that builds `Dockerfile`
+unchanged: dashboard → New → Blueprint → point at this repo → Free plan. Leave
+`CORS_ALLOWED_ORIGINS` unset for now (the blueprint marks it manual-entry); note the
+service's `.onrender.com` URL once it's live.
 
-`render.yaml` is a Render Blueprint that builds the existing `Dockerfile` unchanged:
+**2. Frontend → Vercel.** Import the repo, then set **Root Directory** to `frontend` and add
+environment variable `VITE_API_BASE_URL` = the Render URL from step 1. Vercel auto-detects
+Vite; `VITE_API_BASE_URL` is inlined at build time, so redeploy after changing it.
 
-- **Blueprint:** Render dashboard → New → Blueprint → point at this repo. It creates a Free web service from `render.yaml`.
-- **Manual equivalent:** New → Web Service → this repo → Runtime: Docker → leave the Dockerfile path as `./Dockerfile`.
-
-Leave `CORS_ALLOWED_ORIGINS` unset for now — the blueprint marks it for manual entry because it must point at the frontend's URL, which doesn't exist until step 2. After the first deploy, note the backend's URL (`https://<your-service>.onrender.com`).
-
-Render's free web services spin down after 15 minutes idle (~1 minute cold start on the next request) — fine for a demo; upgrade the plan for always-on.
-
-### 2. Frontend → Vercel
-
-Import this repo in Vercel, then set two project settings (dashboard → Settings):
-
-- **Root Directory:** `frontend`
-- **Environment Variable:** `VITE_API_BASE_URL` = the Render URL from step 1
-
-Vercel auto-detects the Vite framework and build command — no `vercel.json` needed. `VITE_API_BASE_URL` is inlined at build time (the same mechanism as the Docker frontend's build arg — see `frontend/.env.example`), so redeploy after changing it.
-
-### 3. Close the loop: production CORS
-
-Once Vercel gives you a URL (`https://<your-app>.vercel.app`), set it on the Render service (dashboard → Environment):
-
-```text
-CORS_ALLOWED_ORIGINS=https://<your-app>.vercel.app
-```
-
-Render restarts the service automatically when an environment variable changes. Use a comma-separated list to also allow a custom domain or additional origins.
+**3. Close the loop.** Once Vercel gives you a URL, set
+`CORS_ALLOWED_ORIGINS=https://<your-app>.vercel.app` on the Render service (Environment tab).
+Render restarts automatically. Comma-separate multiple origins if needed.

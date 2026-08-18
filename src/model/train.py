@@ -23,6 +23,7 @@ from sklearn.model_selection import train_test_split
 
 from features import FEATURE_NAMES, TaxiTrip
 from features.shared import transform_trip
+from model.drift import compute_reference_stats, save_reference_stats
 from model.schema import filter_valid_trips
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -263,6 +264,8 @@ def main() -> None:
     model_path = arguments.model_path.expanduser().resolve()
     save_model(best.model, best.metrics, model_path, config, len(features))
     save_comparison(results, best.name, model_path.with_name("model_comparison.json"))
+    reference_stats = compute_reference_stats(features)
+    save_reference_stats(reference_stats, model_path.with_name("reference_stats.json"))
 
     print(f"Training rows: {len(features):,}")
     print(f"{'model':<15}{'mae':>12}{'rmse':>12}{'r2':>12}")
