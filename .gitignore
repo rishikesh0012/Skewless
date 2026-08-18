@@ -11,6 +11,8 @@ __pycache__/
 
 data/raw/
 artifacts/
+mlruns/
+mlartifacts/
 
 .DS_Store
 frontend/dist/

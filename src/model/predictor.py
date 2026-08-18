@@ -43,6 +43,11 @@ class FarePredictor:
         return self.model_path.name
 
     @property
+    def raw_model(self) -> PredictionModel:
+        """The loaded model object, for callers (e.g. SHAP) that need direct access."""
+        return self._model
+
+    @property
     def metadata(self) -> Mapping[str, object]:
         metadata_path = self.model_path.with_name("metadata.json")
         if not metadata_path.is_file():

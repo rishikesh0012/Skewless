@@ -83,6 +83,14 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173). The Vite development server talks to the API on port `8000`; set `VITE_API_BASE_URL` if the API is hosted elsewhere.
 
+### 3. Or run both with Docker
+
+```bash
+docker compose up --build
+```
+
+This builds and starts both containers: the API at [http://localhost:8000](http://localhost:8000) (unchanged) and the frontend at [http://localhost:8080](http://localhost:8080) (note: 8080, not the `npm run dev` port 5173). The frontend's API URL is baked in at image build time via the `VITE_API_BASE_URL` build arg (see `frontend/Dockerfile`); the backend's `CORS_ALLOWED_ORIGINS` is set in `docker-compose.yml` to allow the containerized frontend's origin. Stop with `docker compose down`.
+
 ## Demo walkthrough
 
 The UI opens with a deterministic UTC trip and `distance_unit` selected.
@@ -112,9 +120,12 @@ curl -X POST http://localhost:8000/predict \
 
 The response includes the scored fare, full training and serving vectors, all nine comparisons, requested versus applied skew mode, and a concise mismatch list.
 
+`POST /explain` accepts the same request body and returns a SHAP explanation of the *serving* prediction: a base value plus a per-feature contribution for all nine features, so you can see exactly which feature (and how much of its skew) moved the fare. `GET /explain/global-importance` returns one dataset-level feature-importance summary (mean absolute SHAP value per feature) computed from a small built-in reference sample.
+
 ## Tech stack
 
 - **Model:** LightGBM, scikit-learn, pandas, NumPy
+- **Explainability:** SHAP (`model/explain.py`)
 - **Artifacts:** joblib and JSON metadata
 - **API:** FastAPI, Pydantic, Uvicorn
 - **Frontend:** React, TypeScript, Tailwind CSS, Vite
@@ -134,11 +145,12 @@ The raw dataset is intentionally ignored by Git. Then run:
 PYTHONPATH=src python -m model.train --row-limit 100000
 ```
 
-Training validates the rows, builds features through `shared.py`, evaluates the regressor, and writes:
+Training validates the raw rows against a Pandera schema (`model/schema.py`), dropping any row that fails a check, builds features through `shared.py`, trains three candidate regressors (Ridge, Random Forest, LightGBM) on the same split, scores each on MAE/RMSE/R², and selects the lowest-RMSE candidate. It writes:
 
 ```text
-models/fare_model.joblib
-models/metadata.json
+models/fare_model.joblib        # the selected model
+models/metadata.json            # selected model's metadata and metrics
+models/model_comparison.json    # MAE/RMSE/R² for all three candidates
 ```
 
 ## Project structure
@@ -154,7 +166,9 @@ skewless/
 │   │   └── faults.py
 │   ├── model/
 │   │   ├── train.py
-│   │   └── predictor.py
+│   │   ├── schema.py
+│   │   ├── predictor.py
+│   │   └── explain.py
 │   └── api/
 │       └── main.py
 ├── frontend/
@@ -163,9 +177,14 @@ skewless/
 │   └── screenshots/
 ├── models/
 ├── tests/
+├── Dockerfile              # backend image
+├── docker-compose.yml
+├── render.yaml             # Render Blueprint (backend deploy)
 ├── requirements.txt
 └── README.md
 ```
+
+`frontend/Dockerfile` and `frontend/nginx.conf` build and serve the frontend image.
 
 ## Screenshots
 
@@ -205,3 +224,37 @@ npm run lint
 ```
 
 GitHub Actions runs the same backend and frontend checks on pushes and pull requests.
+
+## Deploy
+
+The backend deploys as-is from the existing root `Dockerfile`; the frontend deploys as a static Vite build, no Docker involved. Deploy the backend first — the frontend build needs its URL.
+
+### 1. Backend → Render
+
+`render.yaml` is a Render Blueprint that builds the existing `Dockerfile` unchanged:
+
+- **Blueprint:** Render dashboard → New → Blueprint → point at this repo. It creates a Free web service from `render.yaml`.
+- **Manual equivalent:** New → Web Service → this repo → Runtime: Docker → leave the Dockerfile path as `./Dockerfile`.
+
+Leave `CORS_ALLOWED_ORIGINS` unset for now — the blueprint marks it for manual entry because it must point at the frontend's URL, which doesn't exist until step 2. After the first deploy, note the backend's URL (`https://<your-service>.onrender.com`).
+
+Render's free web services spin down after 15 minutes idle (~1 minute cold start on the next request) — fine for a demo; upgrade the plan for always-on.
+
+### 2. Frontend → Vercel
+
+Import this repo in Vercel, then set two project settings (dashboard → Settings):
+
+- **Root Directory:** `frontend`
+- **Environment Variable:** `VITE_API_BASE_URL` = the Render URL from step 1
+
+Vercel auto-detects the Vite framework and build command — no `vercel.json` needed. `VITE_API_BASE_URL` is inlined at build time (the same mechanism as the Docker frontend's build arg — see `frontend/.env.example`), so redeploy after changing it.
+
+### 3. Close the loop: production CORS
+
+Once Vercel gives you a URL (`https://<your-app>.vercel.app`), set it on the Render service (dashboard → Environment):
+
+```text
+CORS_ALLOWED_ORIGINS=https://<your-app>.vercel.app
+```
+
+Render restarts the service automatically when an environment variable changes. Use a comma-separated list to also allow a custom domain or additional origins.

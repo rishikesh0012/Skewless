@@ -15,6 +15,7 @@ from features.faults import SkewMode
 from features.online import transform_trip as online_transform
 from features.parity import FeatureMismatch, compare_feature_vectors
 from features.shared import transform_trip as shared_transform
+from model.explain import FareExplainer
 from model.predictor import FarePredictor
 
 
@@ -91,9 +92,56 @@ class ModelInfoResponse(BaseModel):
     metadata: dict[str, object]
 
 
+class FeatureContributionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    feature: str
+    value: float
+    shap_value: float
+
+
+class ExplanationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    base_value: float
+    predicted_fare_amount: float
+    feature_mode: FeatureMode
+    applied_skew_mode: SkewMode
+    contributions: tuple[FeatureContributionResponse, ...]
+
+
+class GlobalImportanceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    model_name: str
+    feature_importance: dict[str, float]
+
+
 @lru_cache
 def get_predictor() -> FarePredictor:
     return FarePredictor()
+
+
+@lru_cache
+def get_explainer() -> FareExplainer:
+    return FareExplainer(get_predictor().raw_model)
+
+
+def _build_features(
+    request: PredictionRequest,
+) -> tuple[FeatureVector, FeatureVector, SkewMode]:
+    trip = request.to_trip()
+
+    if request.feature_mode is FeatureMode.BROKEN:
+        training_features = canonical_transform(trip)
+        serving_features = online_transform(trip, request.skew_mode)
+        applied_skew_mode = request.skew_mode
+    else:
+        training_features = shared_transform(trip)
+        serving_features = shared_transform(trip)
+        applied_skew_mode = SkewMode.NONE
+
+    return training_features, serving_features, applied_skew_mode
 
 
 def _build_comparisons(
@@ -150,16 +198,7 @@ def predict(
     request: PredictionRequest,
     predictor: Annotated[FarePredictor, Depends(get_predictor)],
 ) -> PredictionResponse:
-    trip = request.to_trip()
-
-    if request.feature_mode is FeatureMode.BROKEN:
-        training_features = canonical_transform(trip)
-        serving_features = online_transform(trip, request.skew_mode)
-        applied_skew_mode = request.skew_mode
-    else:
-        training_features = shared_transform(trip)
-        serving_features = shared_transform(trip)
-        applied_skew_mode = SkewMode.NONE
+    training_features, serving_features, applied_skew_mode = _build_features(request)
 
     mismatches = compare_feature_vectors(training_features, serving_features)
     mismatch_responses = tuple(MismatchResponse.from_mismatch(item) for item in mismatches)
@@ -198,4 +237,37 @@ def model_info(
         model_name=predictor.model_name,
         feature_names=FEATURE_NAMES,
         metadata=dict(predictor.metadata),
+    )
+
+
+@app.post("/explain", response_model=ExplanationResponse)
+def explain(
+    request: PredictionRequest,
+    explainer: Annotated[FareExplainer, Depends(get_explainer)],
+) -> ExplanationResponse:
+    _, serving_features, applied_skew_mode = _build_features(request)
+    explanation = explainer.explain_prediction(serving_features)
+
+    return ExplanationResponse(
+        base_value=explanation.base_value,
+        predicted_fare_amount=explanation.predicted_fare_amount,
+        feature_mode=request.feature_mode,
+        applied_skew_mode=applied_skew_mode,
+        contributions=tuple(
+            FeatureContributionResponse(
+                feature=item.feature, value=item.value, shap_value=item.shap_value
+            )
+            for item in explanation.contributions
+        ),
+    )
+
+
+@app.get("/explain/global-importance", response_model=GlobalImportanceResponse)
+def global_importance(
+    predictor: Annotated[FarePredictor, Depends(get_predictor)],
+    explainer: Annotated[FareExplainer, Depends(get_explainer)],
+) -> GlobalImportanceResponse:
+    return GlobalImportanceResponse(
+        model_name=predictor.model_name,
+        feature_importance=explainer.global_feature_importance(),
     )

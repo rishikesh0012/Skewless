@@ -2,28 +2,38 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 from zoneinfo import ZoneInfo
 
 import joblib
+import mlflow
+import mlflow.sklearn
 import numpy as np
 import pandas as pd
 from lightgbm import LGBMRegressor
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, r2_score, root_mean_squared_error
 from sklearn.model_selection import train_test_split
 
 from features import FEATURE_NAMES, TaxiTrip
 from features.shared import transform_trip
+from model.schema import filter_valid_trips
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATASET_PATH = PROJECT_ROOT / "data" / "raw" / "yellow_tripdata_2024-01.parquet"
 DEFAULT_MODEL_PATH = PROJECT_ROOT / "models" / "fare_model.joblib"
 NEW_YORK_TIMEZONE = ZoneInfo("America/New_York")
 MINIMUM_TRAINING_ROWS = 20
+RANDOM_FOREST_N_ESTIMATORS = 200
+SELECTION_METRIC = "root_mean_squared_error"
+MLFLOW_EXPERIMENT_NAME = "skewless-fare-model"
+DEFAULT_MLFLOW_TRACKING_URI = (PROJECT_ROOT / "mlruns").as_uri()
 
 RAW_COLUMNS = (
     "tpep_pickup_datetime",
@@ -35,6 +45,12 @@ RAW_COLUMNS = (
 )
 
 
+class RegressorLike(Protocol):
+    def fit(self, x: pd.DataFrame, y: pd.Series) -> object: ...
+    def predict(self, x: pd.DataFrame) -> object: ...
+    def get_params(self, deep: bool = True) -> dict[str, object]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class TrainingConfig:
     validation_size: float = 0.2
@@ -43,6 +59,13 @@ class TrainingConfig:
     learning_rate: float = 0.05
     num_leaves: int = 31
     min_child_samples: int = 20
+
+
+@dataclass(frozen=True, slots=True)
+class ModelResult:
+    name: str
+    model: RegressorLike
+    metrics: dict[str, float]
 
 
 def load_training_data(
@@ -62,15 +85,7 @@ def load_training_data(
         raw[column] = pd.to_numeric(raw[column], errors="coerce")
     raw["passenger_count"] = raw["passenger_count"].fillna(1)
 
-    valid = (
-        raw["tpep_pickup_datetime"].notna()
-        & raw["trip_distance"].between(0.01, 100.0)
-        & raw["fare_amount"].between(0.01, 500.0)
-        & raw["passenger_count"].between(1, 8)
-        & raw["PULocationID"].ge(1)
-        & raw["DOLocationID"].ge(1)
-    )
-    raw = raw.loc[valid].copy()
+    raw = filter_valid_trips(raw).copy()
     if raw.empty:
         raise ValueError("No valid training rows remain after validation")
 
@@ -98,11 +113,33 @@ def load_training_data(
     return features, target
 
 
-def train_model(
+def _build_candidates(config: TrainingConfig) -> dict[str, RegressorLike]:
+    return {
+        "ridge": Ridge(random_state=config.random_state),
+        "random_forest": RandomForestRegressor(
+            n_estimators=RANDOM_FOREST_N_ESTIMATORS,
+            random_state=config.random_state,
+            n_jobs=-1,
+        ),
+        "lightgbm": LGBMRegressor(
+            objective="regression_l1",
+            n_estimators=config.n_estimators,
+            learning_rate=config.learning_rate,
+            num_leaves=config.num_leaves,
+            min_child_samples=config.min_child_samples,
+            random_state=config.random_state,
+            n_jobs=-1,
+            verbosity=-1,
+        ),
+    }
+
+
+def compare_models(
     features: pd.DataFrame,
     target: pd.Series,
     config: TrainingConfig | None = None,
-) -> tuple[LGBMRegressor, dict[str, float]]:
+) -> list[ModelResult]:
+    """Train each candidate regressor on the same split and score it with MAE, RMSE, and R2."""
     if len(features) != len(target):
         raise ValueError("Features and target must contain the same number of rows")
     if len(features) < MINIMUM_TRAINING_ROWS:
@@ -117,28 +154,74 @@ def train_model(
         shuffle=True,
     )
 
-    model = LGBMRegressor(
-        objective="regression_l1",
-        n_estimators=active_config.n_estimators,
-        learning_rate=active_config.learning_rate,
-        num_leaves=active_config.num_leaves,
-        min_child_samples=active_config.min_child_samples,
-        random_state=active_config.random_state,
-        n_jobs=-1,
-        verbosity=-1,
-    )
-    model.fit(x_train, y_train)
-    predictions = np.asarray(model.predict(x_validation), dtype=np.float64)
-    metrics = {
-        "mean_absolute_error": float(mean_absolute_error(y_validation, predictions)),
-        "root_mean_squared_error": float(root_mean_squared_error(y_validation, predictions)),
-        "r2_score": float(r2_score(y_validation, predictions)),
+    results: list[ModelResult] = []
+    for name, model in _build_candidates(active_config).items():
+        model.fit(x_train, y_train)
+        predictions = np.asarray(model.predict(x_validation), dtype=np.float64)
+        metrics = {
+            "mean_absolute_error": float(mean_absolute_error(y_validation, predictions)),
+            "root_mean_squared_error": float(root_mean_squared_error(y_validation, predictions)),
+            "r2_score": float(r2_score(y_validation, predictions)),
+        }
+        results.append(ModelResult(name=name, model=model, metrics=metrics))
+
+    return results
+
+
+def select_best_model(results: list[ModelResult]) -> ModelResult:
+    if not results:
+        raise ValueError("results must contain at least one candidate")
+    return min(results, key=lambda result: result.metrics[SELECTION_METRIC])
+
+
+def save_comparison(
+    results: list[ModelResult],
+    selected_name: str,
+    comparison_path: Path,
+) -> None:
+    ranked = sorted(results, key=lambda result: result.metrics[SELECTION_METRIC])
+    comparison_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "selection_metric": SELECTION_METRIC,
+        "selected_model": selected_name,
+        "candidates": [
+            {
+                "name": result.name,
+                "model_type": type(result.model).__name__,
+                "metrics": result.metrics,
+            }
+            for result in ranked
+        ],
     }
-    return model, metrics
+    comparison_path.write_text(json.dumps(payload, indent=2) + "\n")
+
+
+def log_comparison_to_mlflow(
+    results: list[ModelResult],
+    selected_name: str,
+    training_rows: int,
+    tracking_uri: str = DEFAULT_MLFLOW_TRACKING_URI,
+) -> None:
+    """Log one MLflow run per candidate (params + MAE/RMSE/R2), with the model
+    artifact attached only to the selected candidate's run."""
+    # MLflow >=3 disables the plain filesystem store ("./mlruns") by default and
+    # asks for a database backend. We intentionally stay on the local file store.
+    os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+    mlflow.set_tracking_uri(tracking_uri)
+    mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
+
+    for result in results:
+        with mlflow.start_run(run_name=result.name):
+            mlflow.log_params({"candidate": result.name, **result.model.get_params()})
+            mlflow.log_param("training_rows", training_rows)
+            mlflow.log_metrics(result.metrics)
+            mlflow.set_tag("selected", result.name == selected_name)
+            if result.name == selected_name:
+                mlflow.sklearn.log_model(result.model, name="model")
 
 
 def save_model(
-    model: LGBMRegressor,
+    model: RegressorLike,
     metrics: dict[str, float],
     model_path: Path,
     config: TrainingConfig,
@@ -163,21 +246,37 @@ def main() -> None:
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET_PATH)
     parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--row-limit", type=int, default=100_000)
+    parser.add_argument("--mlflow-tracking-uri", type=str, default=DEFAULT_MLFLOW_TRACKING_URI)
     arguments = parser.parse_args()
 
     config = TrainingConfig()
     features, target = load_training_data(
         arguments.dataset.expanduser().resolve(), arguments.row_limit
     )
-    trained_model, metrics = train_model(features, target, config)
-    save_model(
-        trained_model, metrics, arguments.model_path.expanduser().resolve(), config, len(features)
+
+    results = compare_models(features, target, config)
+    best = select_best_model(results)
+    log_comparison_to_mlflow(
+        results, best.name, len(features), tracking_uri=arguments.mlflow_tracking_uri
     )
 
-    print(f"Saved model: {arguments.model_path}")
+    model_path = arguments.model_path.expanduser().resolve()
+    save_model(best.model, best.metrics, model_path, config, len(features))
+    save_comparison(results, best.name, model_path.with_name("model_comparison.json"))
+
     print(f"Training rows: {len(features):,}")
-    for name, value in metrics.items():
-        print(f"{name}: {value:.6f}")
+    print(f"{'model':<15}{'mae':>12}{'rmse':>12}{'r2':>12}")
+    for result in sorted(results, key=lambda result: result.metrics[SELECTION_METRIC]):
+        marker = " *" if result.name == best.name else ""
+        print(
+            f"{result.name:<15}"
+            f"{result.metrics['mean_absolute_error']:>12.4f}"
+            f"{result.metrics['root_mean_squared_error']:>12.4f}"
+            f"{result.metrics['r2_score']:>12.4f}"
+            f"{marker}"
+        )
+    print(f"Selected model ({SELECTION_METRIC}): {best.name}")
+    print(f"Saved model: {model_path}")
 
 
 if __name__ == "__main__":
