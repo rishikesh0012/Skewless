@@ -1,13 +1,25 @@
 # Skewless — Training-Serving Feature Parity
 
-> A production-shaped ML system built around one concrete, demonstrable failure mode:
-> **training-serving feature skew**. Duplicated feature-engineering code can silently diverge
-> between training and serving — same feature name, different value, no crash, no error, just
-> a wrong prediction. Skewless makes that failure visible, then builds the rest of a real
-> MLOps stack around it: model comparison, MLflow tracking, Pandera validation, SHAP
-> explainability, lightweight drift monitoring, Docker, and a live deployment.
+## Overview
 
-## Live demo
+Skewless is a production-shaped ML system built to demonstrate one concrete failure mode:
+**training-serving feature skew**. This occurs when the logic used to build features during
+training differs from the logic used for live predictions. Both pipelines may produce a
+feature with the same name and a valid numeric value, while the model receives a meaningfully
+different input in production.
+
+The project makes that normally silent mismatch observable. For the same raw NYC taxi trip,
+Skewless builds a training reference vector and a serving vector, compares all nine features,
+and shows how duplicated transformation logic can produce a different prediction without an
+exception or failed API request. It then demonstrates the corrective design: one shared
+feature transformation used by both paths.
+
+Around that example, the repository shows the surrounding ML lifecycle: Pandera validation,
+three-model comparison, MLflow experiment tracking, persisted model artifacts, FastAPI
+serving, SHAP explanations, PSI-based drift monitoring, containerized local execution, and a
+live deployment.
+
+## Live Demo
 
 - **Frontend:** https://skewless.vercel.app
 - **API:** https://skewless-api.onrender.com ([interactive Swagger docs](https://skewless-api.onrender.com/docs))
@@ -15,7 +27,24 @@
 The backend runs on Render's free tier and spins down after 15 minutes idle — the first
 request after a quiet period can take up to a minute to wake it back up.
 
-## What it demonstrates
+## Why This Project Matters
+
+Many ML failures do not look like software failures. The service stays healthy, the request
+schema passes validation, and the model returns a prediction—but the value being scored no
+longer represents the feature used during training.
+
+- Training and production pipelines can evolve independently when transformation logic is
+  duplicated.
+- Matching feature names do not guarantee matching feature values or semantics.
+- Valid-looking values, such as kilometres supplied to a feature trained in miles, can pass
+  through an API without triggering an error.
+- Skewless makes this failure visible by comparing training and serving vectors feature by
+  feature, then contrasts the broken design with a shared-transformation design.
+
+The result is a focused example of why feature parity is an engineering requirement, not only
+a model-quality concern.
+
+## How the Demonstration Works
 
 A distance trained in miles but served in kilometres is still a valid number. The API
 doesn't crash and the model still responds — it just scores the wrong feature vector. Skewless
@@ -23,23 +52,49 @@ builds a training reference vector and a serving vector for the same raw NYC tax
 compares all nine features, and scores the serving vector, so this normally-silent failure
 becomes a visible `8 / 9 matched` in the response.
 
-## Key features
+## Key Features
 
-- **Skew detection** — toggle between a *broken* (duplicated) and *correct* (shared) feature
-  pipeline; compare all 9 features and see exactly which one silently diverged.
-- **Model comparison** — Ridge, Random Forest, and LightGBM trained on the same split, scored
-  on MAE/RMSE/R², lowest-RMSE candidate auto-selected.
-- **MLflow tracking** — every candidate logged as its own run (params, metrics, a `selected`
-  tag); only the winner's model artifact is attached.
-- **Pandera validation** — a declarative schema for the raw training data, replacing
-  hand-rolled row filtering.
-- **SHAP explainability** — per-prediction feature contributions plus a global
-  feature-importance endpoint.
-- **Drift monitoring** — in-memory Population Stability Index comparison of served traffic
-  against the training distribution. No database.
-- **Dockerized** — backend and frontend each containerized; `docker compose up` runs the full
-  stack locally.
-- **Deployed** — FastAPI on Render, React on Vercel, verified live end-to-end including CORS.
+- **Feature-parity diagnostics** — Compares all nine training and serving features for the
+  same raw request, making a mismatch identifiable before it is reduced to a prediction.
+- **Broken-versus-correct pipeline comparison** — Provides a controlled way to observe the
+  maintenance risk of duplicated transformations and the parity guarantee of a shared
+  transformation.
+- **Model comparison and selection** — Evaluates Ridge, Random Forest, and LightGBM on the
+  same split using MAE, RMSE, and R², then selects the lowest-RMSE candidate.
+- **Training-data validation** — Uses a declarative Pandera schema before training, replacing
+  hand-written row-filtering logic with an explicit data contract.
+- **Experiment traceability** — Logs each candidate's parameters and metrics as a separate
+  MLflow run, marks the selected run, and attaches the winning model artifact.
+- **Model explainability** — Provides per-prediction SHAP contributions and dataset-level
+  feature importance so engineers can inspect model behavior at local and global levels.
+- **Drift visibility** — Compares served traffic with the training reference distribution
+  using an in-memory Population Stability Index monitor, without adding a database.
+- **Reproducible execution and deployment** — Containerizes the backend and frontend for
+  local use with Docker Compose, with the live FastAPI and React applications deployed on
+  Render and Vercel and verified end to end including CORS.
+
+## Production ML Workflow
+
+```text
+Data Validation (Pandera)
+        ↓
+Feature Engineering (shared transformation)
+        ↓
+Model Training (Ridge · Random Forest · LightGBM)
+        ↓
+Experiment Tracking (MLflow)
+        ↓
+Model Artifact (model + metadata + reference statistics)
+        ↓
+API Serving (FastAPI)
+        ↓
+Explainability (SHAP)
+        ↓
+Drift Monitoring (in-memory PSI)
+```
+
+Training produces the artifacts under `models/`; the API loads them at startup and does not
+depend on the training data or MLflow while serving requests.
 
 ## Architecture
 
@@ -57,7 +112,25 @@ Full breakdown of every subsystem (training pipeline, Pandera schema, MLflow wor
 internals, drift math, Docker/Render/Vercel config) is in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), including a more detailed diagram.
 
-## Broken versus Correct
+## Key Engineering Decisions
+
+- **Share the correct transformation path.** In Correct mode, training and serving both call
+  `shared.py`, preventing two implementations of the same feature definition from drifting
+  apart. Broken mode keeps separate implementations intentionally so the failure remains
+  demonstrable.
+- **Validate data before training.** Pandera defines the accepted raw-data schema and filters
+  invalid rows before feature construction and model comparison.
+- **Track candidates independently.** MLflow records every candidate as its own run with
+  parameters, metrics, and selection status, preserving the evidence behind model selection.
+- **Separate offline training from online serving.** The training pipeline writes the model,
+  metadata, comparison results, and reference statistics to `models/`; the API loads those
+  artifacts without accessing the training dataset or MLflow.
+- **Explain predictions at two levels.** SHAP supports both per-request feature contributions
+  and global mean absolute feature importance.
+- **Keep drift monitoring lightweight.** The PSI monitor compares in-memory serving traffic
+  with the persisted training reference distribution and intentionally uses no database.
+
+## Broken versus Correct Feature Pipelines
 
 | Mode | Training features | Serving features | Result |
 |---|---|---|---|
@@ -82,7 +155,7 @@ flowchart LR
     S --> F
 ```
 
-### Supported skew scenarios
+### Supported Skew Scenarios
 
 | `skew_mode` | Serving behavior in Broken mode |
 |---|---|
@@ -96,7 +169,7 @@ The model schema is fixed at nine features: `trip_distance_miles`, `passenger_co
 identical timezone conversion, six-decimal distance rounding, missing-passenger default of
 one, weekday/month extraction, weekend logic, and 07:00–10:00 / 16:00–19:00 rush-hour windows.
 
-## Model comparison
+## Model Comparison
 
 Training compares three regressors on the same 80/20 split and selects the lowest-RMSE
 candidate. Results from a full run (`--row-limit 100000`, 95,759 valid rows after Pandera
@@ -115,7 +188,7 @@ been swapped, on purpose, so the demo's numbers stay stable while this README an
 `docs/ARCHITECTURE.md` are written. Retraining regenerates `model_comparison.json` with
 current numbers for whichever model wins.
 
-## API endpoints
+## API Endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -128,7 +201,7 @@ current numbers for whichever model wins.
 
 Full request/response schemas: [skewless-api.onrender.com/docs](https://skewless-api.onrender.com/docs).
 
-## Quick start
+## Quick Start
 
 Requirements: Python 3.11+ and Node.js 22+.
 
@@ -170,7 +243,7 @@ port 5173). The frontend's API URL is baked in at image build time via the
 `VITE_API_BASE_URL` build arg; `docker-compose.yml` sets the backend's `CORS_ALLOWED_ORIGINS`
 to match. Stop with `docker compose down`.
 
-## Demo walkthrough
+## Demo Walkthrough
 
 The UI opens with a deterministic UTC trip and `distance_unit` selected.
 
@@ -209,7 +282,7 @@ architecture changes.
 
 Capture details: [`docs/screenshots/README.md`](docs/screenshots/README.md).
 
-## Train the model
+## Train the Model
 
 The trained model is committed so the demo works immediately. To reproduce it, download the
 January 2024 NYC Yellow Taxi Trip Records parquet file to
@@ -230,7 +303,7 @@ models/model_comparison.json    # MAE/RMSE/R² for all three candidates
 models/reference_stats.json     # per-feature training distribution, for drift monitoring
 ```
 
-## Tech stack
+## Tech Stack
 
 - **Model:** LightGBM, Random Forest, Ridge (scikit-learn), pandas, NumPy
 - **Experiment tracking:** MLflow
@@ -242,7 +315,7 @@ models/reference_stats.json     # per-feature training distribution, for drift m
 - **Infra:** Docker, Render (backend), Vercel (frontend)
 - **Quality:** pytest, Ruff, mypy, oxlint, GitHub Actions
 
-## Project structure
+## Project Structure
 
 ```text
 skewless/
@@ -280,7 +353,7 @@ npm run lint
 
 GitHub Actions runs the same backend and frontend checks on pushes and pull requests.
 
-## Deploy your own copy
+## Deploy Your Own Copy
 
 The backend deploys as-is from the root `Dockerfile`; the frontend deploys as a static Vite
 build (no Docker involved in the actual Vercel deployment). Deploy the backend first — the
